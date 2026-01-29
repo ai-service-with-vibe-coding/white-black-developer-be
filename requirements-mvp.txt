@@ -1,0 +1,22 @@
+# 흑백개발자 MVP 최소 의존성
+# PyTorch CUDA는 별도 설치 필요 (이 파일 설치 전에!):
+#   uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+
+# Web Framework
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+
+# Validation & Settings
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# AI/ML (GPU 기반)
+transformers>=4.37.0
+huggingface-hub>=0.20.0
+bitsandbytes>=0.43.0
+accelerate>=0.25.0
+sentencepiece>=0.1.99
+
+# HTTP Client (테스트용)
+httpx>=0.26.0
+requests>=2.31.0
