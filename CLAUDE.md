@@ -347,6 +347,22 @@ python scripts/demo_analysis.py
 - ⬜ API 라우터 구현
 - ⬜ Pydantic 스키마
 
+## AWS Deployment
+
+프로덕션 배포는 AWS EC2 GPU 인스턴스 (g4dn.xlarge)를 권장합니다:
+
+```bash
+# EC2에서 실행
+docker compose -f docker-compose.prod.yml up -d
+```
+
+관련 파일:
+- `Dockerfile.prod`: 프로덕션용 Docker 이미지
+- `docker-compose.prod.yml`: 프로덕션용 Compose 파일
+- `.env.prod.example`: 프로덕션 환경 변수 예시
+- `scripts/aws-ec2-setup.sh`: EC2 초기 설정 스크립트
+- `AWS_DEPLOYMENT.md`: 상세 배포 가이드
+
 ## External API References
 
 - [FastAPI Documentation](https://fastapi.tiangolo.com/)

@@ -1,0 +1,42 @@
+# ===========================================
+# MVP용 Docker Compose (API만, DB/Redis 없음)
+# ===========================================
+# 사용법: docker compose -f docker-compose.mvp.yml up -d
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.mvp
+    container_name: whiteblack-mvp
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - HF_HOME=/app/model_cache
+      - TRANSFORMERS_CACHE=/app/model_cache
+      - CUDA_VISIBLE_DEVICES=0
+      - DEBUG=${DEBUG:-true}
+    volumes:
+      - model_cache:/app/model_cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  model_cache:

@@ -403,20 +403,46 @@ sudo systemctl restart docker
 docker run --rm --gpus all nvidia/cuda:11.8.0-base nvidia-smi
 ```
 
-## 클라우드 배포 (GPU 인스턴스)
+## AWS 배포
 
-### AWS
-- **g4dn.xlarge**: T4 GPU (16GB), ~$0.53/hour
-- **g5.xlarge**: A10G GPU (24GB), ~$1.01/hour
-- **p3.2xlarge**: V100 GPU (16GB), ~$3.06/hour
+### MVP 배포 (가장 간단, DB 없음)
 
-### GCP
-- **n1-standard-4 + T4**: ~$0.60/hour
-- **a2-highgpu-1g (A100 40GB)**: ~$3.67/hour
+```bash
+# 1. EC2 GPU 인스턴스 생성 (g4dn.xlarge 권장)
+# 2. SSH 접속 후 설정 스크립트 실행
+git clone https://github.com/yourusername/white-black-developer-be.git
+cd white-black-developer-be
+chmod +x scripts/aws-ec2-setup.sh
+sudo ./scripts/aws-ec2-setup.sh
 
-### Lambda Labs (저렴)
-- **1x RTX 4090**: 24GB, $0.69/hour
-- **1x A100**: 40GB, $1.10/hour
+# 3. 재접속 후 MVP 실행 (DB/Redis 없이 API만)
+docker compose -f docker-compose.mvp.yml up -d
+
+# 4. 확인
+curl http://localhost:8000/health
+```
+
+### 프로덕션 배포 (DB + Redis + Celery)
+
+```bash
+# 환경 변수 설정
+cp .env.prod.example .env
+nano .env  # 비밀번호, API 키 등 설정
+
+# 실행
+docker compose -f docker-compose.prod.yml up -d
+```
+
+자세한 내용은 [AWS_DEPLOYMENT.md](AWS_DEPLOYMENT.md) 참고
+
+### 클라우드 GPU 인스턴스 비용
+
+| 서비스 | 인스턴스 | GPU | VRAM | 비용 |
+|--------|----------|-----|------|------|
+| **AWS** | g4dn.xlarge | T4 | 16GB | ~$0.53/hour |
+| AWS | g5.xlarge | A10G | 24GB | ~$1.01/hour |
+| GCP | n1-standard-4 + T4 | T4 | 16GB | ~$0.60/hour |
+| Lambda Labs | 1x RTX 4090 | RTX 4090 | 24GB | $0.69/hour |
 
 ## 라이선스
 
