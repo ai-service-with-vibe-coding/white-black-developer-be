@@ -8,7 +8,6 @@ AI 기반 개발자 실력 평가 플랫폼 - "흑백요리사" 쉐프의 살벌
 
 ## 핵심 특징
 
-
 - **완전 로컬 GPU 실행**: OpenAI API나 Hugging Face Inference API 사용 안 함 (비용 0원)
 - **다중 AI 모델 실행**: 코드 리뷰, 보안 분석, 복잡도 평가
 - **한국어 LLM**: Llama-3-Open-Ko-8B로 자연스러운 한국어 리뷰 생성
