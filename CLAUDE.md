@@ -21,7 +21,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Database**: PostgreSQL + SQLAlchemy 2.0
 - **Cache/Queue**: Redis + Celery
 - **AI**: Hugging Face Transformers (GPU 로컬 추론, API 사용 안함)
-- **GPU**: NVIDIA CUDA 11.8+, VRAM 12GB+ 권장
+- **GPU**: NVIDIA CUDA 11.8+, VRAM 8GB+ (4-bit 양자화)
 - **Auth**: GitHub OAuth 2.0 (Authlib) + JWT
 - **Container**: Docker + Docker Compose (GPU 지원)
 
@@ -31,12 +31,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 FastAPI + Transformers를 사용하여 모든 AI 모델을 GPU에서 직접 실행합니다. API 비용 없이 완전 무료이며, 데이터 프라이버시가 보장됩니다. OpenAI API나 Hugging Face Inference API는 사용하지 않습니다.
 
 ### AI Model Pipeline
-코드 분석은 여러 Hugging Face 모델을 GPU에서 병렬로 실행하여 다각도로 평가합니다:
+코드 분석은 여러 Hugging Face 모델을 GPU에서 실행하여 다각도로 평가합니다:
 - `microsoft/codereviewer`: 전반적 코드 리뷰 (~2GB VRAM)
 - `mahdin70/codebert-devign-code-vulnerability-detector`: 보안 취약점 탐지 (~1GB VRAM)
-- `beomi/OPEN-SOLAR-KO-10.7B`: 안성재 쉐프 페르소나 리뷰 생성 (~6GB VRAM, 4-bit 양자화)
+- `beomi/Llama-3-Open-Ko-8B-Instruct-preview`: 안성재 쉐프 페르소나 리뷰 생성 (~3-4GB VRAM, 4-bit 양자화)
 
-모델은 `app/ai/huggingface_client.py`에서 로드하며, 메모리 효율을 위해 lru_cache로 싱글톤 패턴을 사용합니다. 4-bit 양자화(bitsandbytes)로 메모리 사용량을 1/4로 줄입니다.
+모델은 `app/ai/huggingface_client.py`에서 로드하며, 메모리 효율을 위해 lru_cache로 싱글톤 패턴을 사용합니다. 4-bit NF4 양자화(bitsandbytes)로 메모리 사용량을 1/4로 줄입니다. 총 VRAM 사용량 약 6-7GB로 RTX 4070 8GB에서도 실행 가능합니다.
 
 ### Async Processing with Celery
 코드 분석은 시간이 오래 걸리므로 Celery 큐를 사용한 비동기 처리가 필수입니다. 분석 요청 시 Celery job을 생성하고, worker가 백그라운드에서 처리합니다. 진행 상황은 `task.update_state()`로 업데이트합니다.
@@ -160,23 +160,31 @@ Repository 다운로드 후 분석 전에 반드시 전처리가 필요합니다
 ### GPU Requirements
 **필수 요구사항:**
 - NVIDIA GPU (CUDA 지원)
-- VRAM 12GB+ 권장 (최소 8GB, 4-bit 양자화 사용 시)
-- CUDA 11.8 이상
+- VRAM 8GB+ (4-bit NF4 양자화 사용)
+- CUDA 11.8 이상 (CUDA 12.x도 지원)
 - NVIDIA Driver 470.x 이상
 
 **GPU 없이는 실행 불가**: 이 프로젝트는 GPU 기반 로컬 추론을 전제로 설계되었습니다. CPU만으로는 추론 시간이 너무 느립니다 (분 단위).
 
 **GPU 메모리 최적화:**
-- 4-bit 양자화 사용 (bitsandbytes)로 VRAM 사용량 1/4 감소
+- 4-bit NF4 양자화 사용 (bitsandbytes)로 VRAM 사용량 1/4 감소
 - `app/ai/models/persona_llm.py`에서 `BitsAndBytesConfig` 확인
+- 이중 양자화(`bnb_4bit_use_double_quant=True`)로 추가 메모리 절약
 - 메모리 부족 시 `torch.cuda.empty_cache()` 호출
+
+**VRAM 사용량 (4-bit 양자화 기준):**
+- CodeReviewer: ~2GB
+- VulnerabilityDetector: ~1GB
+- PersonaLLM (Llama-3-Open-Ko-8B): ~3-4GB
+- 총합: ~6-7GB → RTX 4070 8GB에서 실행 가능
 
 ### Persona Consistency
 "안성재 쉐프" 페르소나는 일관성이 중요합니다:
 - `app/ai/prompts/chef_ahn.py`의 `CHEF_AHN_SYSTEM_PROMPT` 사용
-- 로컬 LLM (SOLAR-10.7B) temperature는 0.8로 설정 (창의적 응답)
+- 로컬 LLM (Llama-3-Open-Ko-8B-Instruct) temperature는 0.7로 설정
 - 레벨에 따라 톤 조절 (레벨 1-2: 엄격, 레벨 4-5: 격려)
 - OpenAI API 대신 완전 로컬 실행
+- Llama 3 Instruct 모델은 `apply_chat_template()` 사용 필수
 
 ### Async/Await Pattern
 FastAPI는 비동기를 지원하므로 I/O 바운드 작업 (DB 쿼리, API 호출)에는 `async`/`await`를 사용하세요:
@@ -234,7 +242,7 @@ GITHUB_CALLBACK_URL=http://localhost:8000/api/v1/auth/github/callback
 # AI 모델 설정 (로컬 GPU 실행, API 키 불필요)
 CODE_REVIEWER_MODEL=microsoft/codereviewer
 VULNERABILITY_DETECTOR_MODEL=mahdin70/codebert-devign-code-vulnerability-detector
-PERSONA_MODEL=beomi/OPEN-SOLAR-KO-10.7B
+PERSONA_MODEL=beomi/Llama-3-Open-Ko-8B-Instruct-preview
 
 # 모델 캐시 디렉토리
 HF_HOME=./model_cache
@@ -261,7 +269,7 @@ ENCRYPTION_KEY=...  # 32 bytes for Fernet
 - `app/api/v1/analysis.py`: 코드 분석 API 라우터
 - `app/tasks/analysis_tasks.py`: Celery 백그라운드 작업
 - `app/ai/huggingface_client.py`: GPU 모델 로드 및 캐싱
-- `app/ai/models/persona_llm.py`: 한국어 LLM (페르소나 생성)
+- `app/ai/models/persona_llm.py`: 한국어 LLM (Llama 3 기반 페르소나 생성)
 - `app/ai/models/code_reviewer.py`: 코드 리뷰 모델
 - `app/ai/prompts/chef_ahn.py`: 페르소나 프롬프트
 

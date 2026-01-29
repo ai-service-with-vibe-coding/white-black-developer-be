@@ -19,21 +19,22 @@
 - 특징: 이진 분류 (안전/취약)
 
 ### 3. 페르소나 생성 (한국어 LLM)
-**beomi/OPEN-SOLAR-KO-10.7B** (기본)
+**beomi/Llama-3-Open-Ko-8B-Instruct-preview** (기본)
 - 용도: 안성재 쉐프 스타일 리뷰 생성
-- 크기: ~21GB (FP16)
-- VRAM: ~12GB (FP16), ~6GB (4-bit 양자화)
-- 특징: 한국어 성능 우수, Upstage 제작
+- 크기: ~16GB (FP16)
+- VRAM: ~8GB (FP16), ~3-4GB (4-bit NF4 양자화)
+- 특징: Llama 3 기반, 한국어 성능 우수, `apply_chat_template()` 사용 필수
 
 **대안 모델:**
+- `beomi/OPEN-SOLAR-KO-10.7B` - VRAM 12GB+ 필요, 한국어 성능 우수
 - `yanolja/EEVE-Korean-Instruct-10.8B-v1.0` - 야놀자, 최신
-- `beomi/llama-2-ko-7b` - 경량 (VRAM 8GB)
-- `maywell/EXAONE-3.0-7.8B-Instruct` - LG AI 연구원
+- `beomi/KoAlpaca-Polyglot-5.8B` - 경량 (VRAM 4GB)
+- `maywell/Synatra-7B-v0.3-dpo` - 한국어 대화형
 
 ## GPU 메모리 요구사항
 
-### 최소 사양 (양자화 사용)
-- **VRAM**: 8GB (RTX 3060 12GB, RTX 3070 등)
+### 최소 사양 (4-bit NF4 양자화 사용)
+- **VRAM**: 8GB (RTX 4070, RTX 3070 등)
 - **RAM**: 16GB
 - **저장공간**: 30GB
 
@@ -46,6 +47,14 @@
 - **VRAM**: 24GB+ (RTX 4090, A5000, A100 등)
 - **RAM**: 64GB
 - **저장공간**: 100GB
+
+### 현재 설정 기준 VRAM 사용량 (4-bit NF4)
+| 모델 | VRAM 사용량 |
+|------|------------|
+| CodeReviewer | ~2GB |
+| VulnerabilityDetector | ~1GB |
+| PersonaLLM (Llama-3-8B) | ~3-4GB |
+| **총합** | **~6-7GB** |
 
 ## 모델 메모리 최적화
 
@@ -175,9 +184,9 @@ docker run --rm --gpus all nvidia/cuda:11.8.0-base nvidia-smi
 ### 자동 다운로드 (권장)
 ```python
 # 첫 실행 시 자동으로 Hugging Face Hub에서 다운로드
-from transformers import AutoModel
+from transformers import AutoModelForCausalLM
 
-model = AutoModel.from_pretrained("beomi/OPEN-SOLAR-KO-10.7B")
+model = AutoModelForCausalLM.from_pretrained("beomi/Llama-3-Open-Ko-8B-Instruct-preview")
 # ~/.cache/huggingface/hub/ 에 저장됨
 ```
 
@@ -187,8 +196,8 @@ model = AutoModel.from_pretrained("beomi/OPEN-SOLAR-KO-10.7B")
 pip install huggingface-hub
 
 # 모델 다운로드
-huggingface-cli download beomi/OPEN-SOLAR-KO-10.7B \
-  --local-dir ./model_cache/SOLAR-10.7B
+huggingface-cli download beomi/Llama-3-Open-Ko-8B-Instruct-preview \
+  --local-dir ./model_cache/Llama-3-Ko-8B
 
 # 환경 변수 설정
 export HF_HOME=./model_cache
@@ -205,13 +214,17 @@ class Settings(BaseSettings):
 
 ## 성능 벤치마크
 
-### SOLAR-10.7B (페르소나 LLM)
+### Llama-3-Open-Ko-8B (페르소나 LLM)
+| 설정 | VRAM | 추론 시간 (256 토큰) |
+|------|------|---------------------|
+| FP16 | 8GB | ~10초 |
+| 4-bit (NF4) | 3-4GB | ~15초 |
+
+### SOLAR-10.7B (대안 모델)
 | 설정 | VRAM | 추론 시간 (500 토큰) |
 |------|------|---------------------|
-| FP32 | 24GB | ~15초 |
 | FP16 | 12GB | ~8초 |
-| 8-bit | 6GB | ~10초 |
-| 4-bit (NF4) | 3GB | ~12초 |
+| 4-bit (NF4) | 6GB | ~12초 |
 
 ### CodeReviewer
 | 설정 | VRAM | 추론 시간 (512 토큰) |
@@ -219,7 +232,7 @@ class Settings(BaseSettings):
 | FP32 | 4GB | ~2초 |
 | FP16 | 2GB | ~1초 |
 
-*벤치마크 환경: NVIDIA RTX 4090, CUDA 11.8*
+*벤치마크 환경: NVIDIA RTX 4070 8GB, CUDA 12.6*
 
 ## 트러블슈팅
 
@@ -249,7 +262,7 @@ model = AutoModelForCausalLM.from_pretrained(
 )
 
 # 해결 방법 3: 작은 모델 사용
-# SOLAR-10.7B → Llama-2-ko-7b
+# Llama-3-8B → KoAlpaca-5.8B
 ```
 
 ### 모델 로드 실패
@@ -261,7 +274,49 @@ rm -rf ~/.cache/huggingface/hub/
 git lfs install
 
 # 해결 방법 3: 직접 다운로드
-huggingface-cli download beomi/OPEN-SOLAR-KO-10.7B
+huggingface-cli download beomi/Llama-3-Open-Ko-8B-Instruct-preview
+```
+
+## Llama 3 Instruct 모델 사용법
+
+### apply_chat_template 사용 (필수)
+Llama 3 Instruct 모델은 반드시 `apply_chat_template()`을 사용해야 합니다:
+
+```python
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+model_id = "beomi/Llama-3-Open-Ko-8B-Instruct-preview"
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+model = AutoModelForCausalLM.from_pretrained(model_id, device_map="auto")
+
+messages = [
+    {"role": "system", "content": "당신은 코드 심사위원입니다."},
+    {"role": "user", "content": "이 코드를 평가해주세요."},
+]
+
+input_ids = tokenizer.apply_chat_template(
+    messages,
+    add_generation_prompt=True,
+    return_tensors="pt"
+).to(model.device)
+
+# 종료 토큰 설정 (중요!)
+terminators = [
+    tokenizer.eos_token_id,
+    tokenizer.convert_tokens_to_ids("<|eot_id|>")
+]
+
+outputs = model.generate(
+    input_ids,
+    max_new_tokens=256,
+    eos_token_id=terminators,
+    do_sample=True,
+    temperature=0.7,
+    top_p=0.9,
+)
+
+# 응답만 추출
+response = tokenizer.decode(outputs[0][input_ids.shape[-1]:], skip_special_tokens=True)
 ```
 
 ## 클라우드 GPU 옵션

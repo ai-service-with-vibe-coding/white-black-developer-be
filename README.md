@@ -8,11 +8,13 @@ AI 기반 개발자 실력 평가 플랫폼 - "흑백요리사" 쉐프의 살벌
 
 ## 핵심 특징
 
-- ✅ **완전 로컬 GPU 실행**: OpenAI API나 Hugging Face Inference API 사용 안 함 (비용 0원)
-- 🚀 **다중 AI 모델 병렬 실행**: 코드 리뷰, 보안 분석, 복잡도 평가
-- 🇰🇷 **한국어 LLM**: SOLAR-10.7B로 자연스러운 한국어 리뷰 생성
-- 🎭 **독특한 페르소나**: "흑백요리사" 쉐프 말투 재현
-- 📊 **5단계 레벨 시스템**: 객관적 가중치 기반 평가
+
+- **완전 로컬 GPU 실행**: OpenAI API나 Hugging Face Inference API 사용 안 함 (비용 0원)
+- **다중 AI 모델 실행**: 코드 리뷰, 보안 분석, 복잡도 평가
+- **한국어 LLM**: Llama-3-Open-Ko-8B로 자연스러운 한국어 리뷰 생성
+- **독특한 페르소나**: "흑백요리사" 쉐프 말투 재현
+- **5단계 레벨 시스템**: 객관적 가중치 기반 평가
+- **8GB VRAM 지원**: 4-bit NF4 양자화로 RTX 4070에서도 실행 가능
 
 ## 기술 스택
 
@@ -24,20 +26,20 @@ AI 기반 개발자 실력 평가 플랫폼 - "흑백요리사" 쉐프의 살벌
 
 ### AI/ML (GPU 필수)
 - **Transformers**: Hugging Face Transformers (로컬 실행)
-- **PyTorch**: CUDA 11.8+ 지원
-- **Quantization**: bitsandbytes (4-bit 양자화)
-- **GPU**: NVIDIA GPU, VRAM 12GB+ 권장
+- **PyTorch**: CUDA 11.8+ 지원 (CUDA 12.x도 호환)
+- **Quantization**: bitsandbytes (4-bit NF4 양자화)
+- **GPU**: NVIDIA GPU, VRAM 8GB+ (4-bit 양자화 사용)
 
 ### 사용 모델
-1. **microsoft/codereviewer** - 전반적 코드 리뷰
-2. **mahdin70/codebert-devign-code-vulnerability-detector** - 보안 취약점 탐지
-3. **beomi/OPEN-SOLAR-KO-10.7B** - 쉐프 페르소나 리뷰 생성
+1. **microsoft/codereviewer** - 전반적 코드 리뷰 (~2GB VRAM)
+2. **mahdin70/codebert-devign-code-vulnerability-detector** - 보안 취약점 탐지 (~1GB VRAM)
+3. **beomi/Llama-3-Open-Ko-8B-Instruct-preview** - 쉐프 페르소나 리뷰 생성 (~3-4GB VRAM, 4-bit)
 
 ## 시스템 요구사항
 
-### 최소 사양 (4-bit 양자화 사용)
+### 최소 사양 (4-bit NF4 양자화 사용)
 - **GPU**: NVIDIA GPU (CUDA 지원)
-- **VRAM**: 8GB (RTX 3060 12GB, RTX 3070 등)
+- **VRAM**: 8GB (RTX 4070, RTX 3070 Ti 등)
 - **RAM**: 16GB
 - **저장공간**: 30GB
 
@@ -52,6 +54,14 @@ AI 기반 개발자 실력 평가 플랫폼 - "흑백요리사" 쉐프의 살벌
 - **VRAM**: 24GB+
 - **RAM**: 64GB
 - **저장공간**: 100GB
+
+### 현재 설정 기준 VRAM 사용량
+| 모델 | VRAM |
+|------|------|
+| CodeReviewer | ~2GB |
+| VulnerabilityDetector | ~1GB |
+| PersonaLLM (Llama-3-8B, 4-bit) | ~3-4GB |
+| **총합** | **~6-7GB** |
 
 ## 빠른 시작
 
@@ -195,7 +205,7 @@ GITHUB_CALLBACK_URL=http://localhost:8000/api/v1/auth/github/callback
 # AI 모델 (로컬 GPU 실행)
 CODE_REVIEWER_MODEL=microsoft/codereviewer
 VULNERABILITY_DETECTOR_MODEL=mahdin70/codebert-devign-code-vulnerability-detector
-PERSONA_MODEL=beomi/OPEN-SOLAR-KO-10.7B
+PERSONA_MODEL=beomi/Llama-3-Open-Ko-8B-Instruct-preview
 
 # 모델 캐시 디렉토리
 HF_HOME=./model_cache
@@ -367,7 +377,7 @@ torch.cuda.empty_cache()
 celery -A app.tasks.celery_app worker --concurrency=1
 
 # 해결 방법 3: 더 작은 모델 사용
-# PERSONA_MODEL=beomi/llama-2-ko-7b
+# PERSONA_MODEL=beomi/KoAlpaca-Polyglot-5.8B
 ```
 
 ### 모델 다운로드 실패
@@ -378,7 +388,7 @@ rm -rf ./model_cache/*
 rm -rf ~/.cache/huggingface/*
 
 # 직접 다운로드
-huggingface-cli download beomi/OPEN-SOLAR-KO-10.7B
+huggingface-cli download beomi/Llama-3-Open-Ko-8B-Instruct-preview
 ```
 
 ### Docker GPU 인식 안 됨
@@ -412,10 +422,6 @@ docker run --rm --gpus all nvidia/cuda:11.8.0-base nvidia-smi
 ## 라이선스
 
 MIT License
-
-## 기여
-
-이슈와 PR을 환영합니다!
 
 ## 문의
 
