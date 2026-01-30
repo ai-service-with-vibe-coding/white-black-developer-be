@@ -1,7 +1,9 @@
 """
 코드 분석 API (MVP)
 """
+import json
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from app.schemas.analysis import (
     CodeAnalysisRequest,
     CodeAnalysisResponse,
@@ -11,6 +13,7 @@ from app.schemas.analysis import (
 )
 from app.services.code_analysis_service import get_code_analysis_service
 from app.ai.huggingface_client import get_hf_client
+from app.ai.prompts.chef_ahn import CHEF_AHN_SYSTEM_PROMPT, build_review_prompt
 from app.utils.gpu_utils import get_gpu_memory_info
 from app.utils.logger import get_logger
 import torch
@@ -146,3 +149,116 @@ async def preload_models():
             status_code=500,
             detail=f"모델 로드 실패: {str(e)}"
         )
+
+
+@router.post(
+    "/analyze/stream",
+    summary="코드 분석 (스트리밍)",
+    description="""
+    코드 분석 결과를 SSE(Server-Sent Events)로 스트리밍합니다.
+
+    **이벤트 타입:**
+    - `analysis`: 코드 분석 결과 (점수, 리뷰 등) - 즉시 전송
+    - `persona_token`: 페르소나 리뷰 토큰 - 실시간 스트리밍
+    - `persona_done`: 페르소나 리뷰 완료
+    - `error`: 에러 발생
+    - `done`: 모든 처리 완료
+    """,
+)
+async def analyze_code_stream(request: CodeAnalysisRequest):
+    """
+    코드 분석 스트리밍 API
+
+    SSE 형식으로 결과를 실시간 전송합니다.
+    코드 분석 결과는 즉시 전송되고, 페르소나 리뷰는 토큰 단위로 스트리밍됩니다.
+    """
+
+    def generate_sse():
+        try:
+            logger.info(f"Stream analysis request. Code length: {len(request.code)}")
+
+            # 1단계: 코드 분석 (페르소나 제외)
+            service = get_code_analysis_service()
+            result = service.analyze(
+                code=request.code,
+                language=request.language.value,
+                include_persona_review=False,  # 페르소나는 별도 스트리밍
+            )
+
+            # 분석 결과 즉시 전송
+            analysis_data = {
+                "level": result.level,
+                "level_title": result.level_title,
+                "verdict": result.verdict,
+                "overall_score": round(result.overall_score, 2),
+                "scores": {
+                    "security": round(result.security_score, 2),
+                    "quality": round(result.quality_score, 2),
+                    "best_practices": round(result.best_practices_score, 2),
+                    "complexity": round(result.complexity_score, 2),
+                    "documentation": round(result.documentation_score, 2),
+                },
+                "code_review": result.code_review,
+                "is_vulnerable": result.is_vulnerable,
+                "vulnerability_score": round(result.vulnerability_score, 2),
+                "issues": result.issues,
+                "suggestions": result.suggestions,
+                "language": result.language,
+                "line_count": result.line_count,
+            }
+
+            yield f"event: analysis\ndata: {json.dumps(analysis_data, ensure_ascii=False)}\n\n"
+
+            # 2단계: 페르소나 리뷰 스트리밍 (요청 시에만)
+            if request.include_persona_review:
+                logger.info("Starting persona review streaming...")
+
+                # 프롬프트 생성
+                scores = {
+                    "overall": result.overall_score,
+                    "security": result.security_score,
+                    "quality": result.quality_score,
+                    "best_practices": result.best_practices_score,
+                    "complexity": result.complexity_score,
+                    "documentation": result.documentation_score,
+                }
+                issues = result.issues + result.suggestions[:2]
+                user_prompt = build_review_prompt(
+                    level=result.level,
+                    scores=scores,
+                    issues=issues,
+                )
+
+                # 페르소나 LLM 스트리밍
+                client = get_hf_client()
+                persona_llm = client.get_persona_llm()
+
+                full_review = ""
+                for token in persona_llm.generate_review_stream(
+                    system_prompt=CHEF_AHN_SYSTEM_PROMPT,
+                    user_prompt=user_prompt,
+                    max_new_tokens=256,
+                    temperature=0.7,
+                ):
+                    full_review += token
+                    yield f"event: persona_token\ndata: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
+
+                # 페르소나 완료
+                yield f"event: persona_done\ndata: {json.dumps({'full_review': full_review}, ensure_ascii=False)}\n\n"
+
+            # 완료
+            yield f"event: done\ndata: {json.dumps({'status': 'completed'})}\n\n"
+
+        except Exception as e:
+            logger.error(f"Stream analysis failed: {e}")
+            yield f"event: error\ndata: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        generate_sse(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Nginx 버퍼링 비활성화
+        },
+    )

@@ -3,9 +3,10 @@
 안성재 쉐프 스타일 리뷰 생성
 """
 import os
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TextStreamer
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TextStreamer, TextIteratorStreamer
 import torch
-from typing import Optional
+from typing import Optional, Iterator
+from threading import Thread
 from app.config import settings
 from app.utils.logger import get_logger
 
