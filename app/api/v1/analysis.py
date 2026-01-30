@@ -42,6 +42,7 @@ async def analyze_code(request: CodeAnalysisRequest):
     """
     try:
         logger.info(f"Analysis request received. Code length: {len(request.code)}")
+        logger.info(f"Code preview (first 500 chars):\n{request.code[:500]}")
 
         service = get_code_analysis_service()
 
@@ -176,6 +177,7 @@ async def analyze_code_stream(request: CodeAnalysisRequest):
     def generate_sse():
         try:
             logger.info(f"Stream analysis request. Code length: {len(request.code)}")
+            logger.info(f"Code preview (first 500 chars):\n{request.code[:500]}")
 
             # 1단계: 코드 분석 (페르소나 제외)
             service = get_code_analysis_service()
