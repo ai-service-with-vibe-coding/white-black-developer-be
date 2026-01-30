@@ -234,6 +234,7 @@ async def analyze_code_stream(request: CodeAnalysisRequest):
                 persona_llm = client.get_persona_llm()
 
                 full_review = ""
+                token_count = 0
                 for token in persona_llm.generate_review_stream(
                     system_prompt=CHEF_AHN_SYSTEM_PROMPT,
                     user_prompt=user_prompt,
@@ -241,9 +242,16 @@ async def analyze_code_stream(request: CodeAnalysisRequest):
                     temperature=0.7,
                 ):
                     full_review += token
+                    token_count += 1
+
+                    # 10토큰마다 진행 상황 로그
+                    if token_count % 10 == 0:
+                        logger.info(f"[Streaming] {token_count} tokens sent... (preview: ...{full_review[-30:]})")
+
                     yield f"event: persona_token\ndata: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
 
                 # 페르소나 완료
+                logger.info(f"[Streaming] Completed! Total {token_count} tokens, {len(full_review)} chars")
                 yield f"event: persona_done\ndata: {json.dumps({'full_review': full_review}, ensure_ascii=False)}\n\n"
 
             # 완료
