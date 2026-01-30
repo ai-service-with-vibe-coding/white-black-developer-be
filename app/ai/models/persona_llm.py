@@ -230,6 +230,99 @@ class PersonaLLM:
             logger.error(f"Traceback: {traceback.format_exc()}")
             return "리뷰 생성 중 오류가 발생했습니다. 다시 시도해주세요."
 
+    def generate_review_stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_new_tokens: int = 256,
+        temperature: float = 0.7,
+    ) -> Iterator[str]:
+        """
+        리뷰 스트리밍 생성 (토큰 단위로 yield)
+
+        Args:
+            system_prompt: 시스템 프롬프트 (페르소나 정의)
+            user_prompt: 사용자 프롬프트 (평가 결과)
+            max_new_tokens: 생성할 최대 토큰 수
+            temperature: 생성 온도
+
+        Yields:
+            생성된 토큰 문자열
+        """
+        try:
+            logger.info("Starting streaming review generation...")
+
+            # Llama 3 Instruct 메시지 형식
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+
+            # 디바이스 및 입력 준비
+            device = next(self.model.parameters()).device
+
+            input_ids = self.tokenizer.apply_chat_template(
+                messages,
+                add_generation_prompt=True,
+                return_tensors="pt"
+            )
+
+            if not isinstance(input_ids, torch.Tensor):
+                input_ids = input_ids["input_ids"]
+            input_ids = input_ids.to(device)
+
+            # 종료 토큰 설정
+            terminators = [self.tokenizer.eos_token_id]
+            eot_id = self.tokenizer.convert_tokens_to_ids("<|eot_id|>")
+            if eot_id is not None and eot_id != self.tokenizer.unk_token_id:
+                terminators.append(eot_id)
+
+            # TextIteratorStreamer 설정 (비동기 스트리밍용)
+            streamer = TextIteratorStreamer(
+                self.tokenizer,
+                skip_prompt=True,
+                skip_special_tokens=True
+            )
+
+            # 생성 파라미터
+            generation_kwargs = {
+                "input_ids": input_ids,
+                "max_new_tokens": max_new_tokens,
+                "eos_token_id": terminators,
+                "do_sample": True,
+                "temperature": temperature,
+                "top_p": 0.9,
+                "pad_token_id": self.tokenizer.pad_token_id,
+                "streamer": streamer,
+            }
+
+            # 별도 스레드에서 생성 실행
+            thread = Thread(target=self._generate_in_thread, args=(generation_kwargs,))
+            thread.start()
+
+            logger.info("[PersonaLLM] Generation thread started, streaming tokens...")
+
+            # 토큰 스트리밍
+            token_count = 0
+            for text in streamer:
+                if text:
+                    token_count += 1
+                    yield text
+
+            thread.join()
+            logger.info(f"[PersonaLLM] Streaming completed. Total tokens yielded: {token_count}")
+
+        except Exception as e:
+            import traceback
+            logger.error(f"Streaming error: {type(e).__name__}: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            yield "리뷰 생성 중 오류가 발생했습니다."
+
+    def _generate_in_thread(self, generation_kwargs: dict):
+        """별도 스레드에서 모델 생성 실행"""
+        with torch.no_grad():
+            self.model.generate(**generation_kwargs)
+
     def generate_simple(self, prompt: str, max_new_tokens: int = 500) -> str:
         """
         간단한 텍스트 생성 (시스템 프롬프트 없이)
