@@ -36,8 +36,10 @@ class FileAnalysisResult:
     language: str
     line_count: int
     code_review: str = ""
+    code_summary: str = ""  # AI 모델의 코드 요약
     vulnerability: Dict = field(default_factory=dict)
     quality_score: float = 0.0
+    metrics: Dict = field(default_factory=dict)  # 정적 분석 메트릭
     issues: List[str] = field(default_factory=list)
 
 
@@ -61,6 +63,12 @@ class RepositoryAnalysisResult:
     critical_issues: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     suggestions: List[str] = field(default_factory=list)
+
+    # AI 코드 요약 목록
+    code_summaries: List[str] = field(default_factory=list)
+
+    # 집계된 메트릭
+    aggregated_metrics: Dict = field(default_factory=dict)
 
     # 레벨
     level: int = 1
@@ -178,13 +186,29 @@ class AnalysisOrchestrator:
                     language=code_file.language,
                     line_count=code_file.line_count,
                     code_review=review_result.get("review", ""),
+                    code_summary=review_result.get("summary", ""),
                     quality_score=review_result.get("quality_score", 70.0),
+                    metrics=review_result.get("metrics", {}),
                 )
 
                 # 리뷰에서 이슈 추출
                 file_result.issues = self._extract_issues_from_review(
                     review_result.get("review", "")
                 )
+
+                # 코드 요약에서 추가 이슈 추출
+                if file_result.code_summary:
+                    summary_issues = self._extract_issues_from_summary(
+                        file_result.code_summary
+                    )
+                    file_result.issues.extend(summary_issues)
+
+                # 메트릭 기반 이슈 추출
+                if file_result.metrics:
+                    metrics_issues = self._extract_issues_from_metrics(
+                        file_result.metrics
+                    )
+                    file_result.issues.extend(metrics_issues)
 
                 results.append(file_result)
 
@@ -252,6 +276,62 @@ class AnalysisOrchestrator:
 
         return issues[:5]  # 최대 5개
 
+    def _extract_issues_from_summary(self, summary: str) -> List[str]:
+        """AI 코드 요약에서 이슈 추출"""
+        issues = []
+        summary_lower = summary.lower()
+
+        # AI 요약에서 자주 나오는 문제 키워드
+        summary_keywords = {
+            "unnecessary": "Unnecessary code detected",
+            "whitespace": "Whitespace issues",
+            "unused": "Unused code/variables",
+            "redundant": "Redundant code",
+            "missing": "Missing implementation",
+            "incomplete": "Incomplete code",
+            "deprecated": "Deprecated usage",
+            "hardcoded": "Hardcoded values",
+            "magic number": "Magic numbers detected",
+            "todo": "TODO items remaining",
+            "fixme": "FIXME items found",
+            "hack": "Code hack detected",
+        }
+
+        for keyword, message in summary_keywords.items():
+            if keyword in summary_lower:
+                issues.append(message)
+
+        return issues[:3]  # 최대 3개
+
+    def _extract_issues_from_metrics(self, metrics: Dict) -> List[str]:
+        """정적 분석 메트릭에서 이슈 추출"""
+        issues = []
+
+        if not metrics:
+            return issues
+
+        # 라인 길이 이슈
+        if metrics.get("max_line_length", 0) > 120:
+            issues.append(f"Line too long (max: {metrics['max_line_length']} chars)")
+
+        # 중첩 깊이 이슈
+        if metrics.get("max_nesting", 0) > 4:
+            issues.append(f"Deep nesting detected (depth: {metrics['max_nesting']})")
+
+        # 문서화 부족
+        if metrics.get("documentation_ratio", 0) == 0:
+            issues.append("No documentation/comments found")
+
+        # 함수 부재 (긴 코드에서)
+        if metrics.get("code_lines", 0) > 50 and metrics.get("function_count", 0) == 0:
+            issues.append("Large file without functions - consider modularization")
+
+        # 에러 처리 부재
+        if metrics.get("function_count", 0) > 3 and metrics.get("try_except_count", 0) == 0:
+            issues.append("No error handling found")
+
+        return issues[:3]  # 최대 3개
+
     def _calculate_scores(self, result: RepositoryAnalysisResult):
         """종합 점수 계산"""
         if not result.file_results:
@@ -278,7 +358,7 @@ class AnalysisOrchestrator:
         # 복잡도 점수 (라인 수 기반 휴리스틱)
         result.complexity_score = self._calculate_complexity_score(result)
 
-        # 문서화 점수 (간단한 휴리스틱)
+        # 문서화 점수 (메트릭 기반)
         result.documentation_score = self._calculate_documentation_score(result)
 
         # 종합 점수 (가중 평균)
@@ -293,6 +373,15 @@ class AnalysisOrchestrator:
 
         # 레벨 계산
         result.level = self._calculate_level(result.overall_score)
+
+        # AI 코드 요약 집계 (유의미한 것만)
+        result.code_summaries = [
+            fr.code_summary for fr in result.file_results
+            if fr.code_summary and len(fr.code_summary) > 10
+        ][:10]  # 최대 10개
+
+        # 메트릭 집계
+        result.aggregated_metrics = self._aggregate_metrics(result.file_results)
 
     def _calculate_best_practices_score(self, result: RepositoryAnalysisResult) -> float:
         """베스트 프랙티스 점수"""
@@ -326,9 +415,72 @@ class AnalysisOrchestrator:
             return 50.0
 
     def _calculate_documentation_score(self, result: RepositoryAnalysisResult) -> float:
-        """문서화 점수 (간단한 휴리스틱)"""
-        # TODO: 실제 주석/문서 분석 구현
-        return 65.0
+        """문서화 점수 (메트릭 기반)"""
+        if not result.file_results:
+            return 65.0
+
+        # 각 파일의 documentation_ratio 평균 계산
+        doc_ratios = []
+        for fr in result.file_results:
+            if fr.metrics and "documentation_ratio" in fr.metrics:
+                doc_ratios.append(fr.metrics["documentation_ratio"])
+
+        if not doc_ratios:
+            return 65.0
+
+        avg_doc_ratio = sum(doc_ratios) / len(doc_ratios)
+
+        # documentation_ratio를 점수로 변환 (0~100)
+        # 0.2 이상이면 100점, 0이면 40점
+        if avg_doc_ratio >= 0.2:
+            return 100.0
+        elif avg_doc_ratio >= 0.1:
+            return 80.0
+        elif avg_doc_ratio >= 0.05:
+            return 65.0
+        elif avg_doc_ratio > 0:
+            return 50.0
+        else:
+            return 40.0
+
+    def _aggregate_metrics(self, file_results: List[FileAnalysisResult]) -> Dict:
+        """파일별 메트릭을 집계"""
+        if not file_results:
+            return {}
+
+        total_code_lines = 0
+        total_comment_lines = 0
+        total_functions = 0
+        total_classes = 0
+        max_nesting = 0
+        total_try_except = 0
+        files_with_metrics = 0
+
+        for fr in file_results:
+            if not fr.metrics:
+                continue
+
+            files_with_metrics += 1
+            total_code_lines += fr.metrics.get("code_lines", 0)
+            total_comment_lines += fr.metrics.get("comment_lines", 0)
+            total_functions += fr.metrics.get("function_count", 0)
+            total_classes += fr.metrics.get("class_count", 0)
+            max_nesting = max(max_nesting, fr.metrics.get("max_nesting", 0))
+            total_try_except += fr.metrics.get("try_except_count", 0)
+
+        if files_with_metrics == 0:
+            return {}
+
+        return {
+            "total_code_lines": total_code_lines,
+            "total_comment_lines": total_comment_lines,
+            "total_functions": total_functions,
+            "total_classes": total_classes,
+            "max_nesting_depth": max_nesting,
+            "total_error_handlers": total_try_except,
+            "avg_functions_per_file": total_functions / files_with_metrics,
+            "comment_ratio": total_comment_lines / max(total_code_lines, 1),
+        }
 
     def _calculate_level(self, overall_score: float) -> int:
         """레벨 계산 (1-5)"""

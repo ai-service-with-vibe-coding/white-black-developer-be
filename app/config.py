@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
 
     # AI 모델 설정 (로컬 GPU 실행)
-    CODE_REVIEWER_MODEL: str = "microsoft/codereviewer"
+    CODE_REVIEWER_MODEL: str = "Salesforce/codet5-base-multi-sum"
     VULNERABILITY_DETECTOR_MODEL: str = "mahdin70/codebert-devign-code-vulnerability-detector"
     # 10.7B 모델 (VRAM 12GB+ 필요)
     # PERSONA_MODEL: str = "beomi/OPEN-SOLAR-KO-10.7B"

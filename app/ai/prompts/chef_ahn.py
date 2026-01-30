@@ -37,7 +37,7 @@ CHEF_AHN_SYSTEM_PROMPT = """당신은 코드 심사위원 안성재입니다. �
 
 
 def build_review_prompt(level: int, scores: Dict[str, float], issues: List[str]) -> str:
-    """리뷰 프롬프트 생성"""
+    """리뷰 프롬프트 생성 (기본)"""
 
     severity = "엄격하게 지적하세요" if level <= 2 else "개선점을 제시하세요" if level == 3 else "칭찬하되 개선점도 언급하세요"
     verdict = "탈락입니다" if level == 1 else "보류하겠습니다" if level == 2 else "생존하셨습니다" if level == 3 else "통과하셨습니다" if level == 4 else "축하드립니다. 통과하셨습니다"
@@ -58,6 +58,62 @@ def build_review_prompt(level: int, scores: Dict[str, float], issues: List[str])
 - {severity}
 - 마지막에 "{verdict}"로 판정을 내리세요
 - 100-200자 내외로 작성하세요
+- 오직 심사평만 작성하고, 다른 내용은 포함하지 마세요
+
+심사평:"""
+
+
+def build_detailed_review_prompt(
+    level: int,
+    scores: Dict[str, float],
+    issues: List[str],
+    code_summaries: List[str] = None,
+    metrics: Dict = None,
+) -> str:
+    """상세 리뷰 프롬프트 생성 (코드 요약 및 메트릭 포함)"""
+
+    severity = "엄격하게 지적하세요" if level <= 2 else "개선점을 제시하세요" if level == 3 else "칭찬하되 개선점도 언급하세요"
+    verdict = "탈락입니다" if level == 1 else "보류하겠습니다" if level == 2 else "생존하셨습니다" if level == 3 else "통과하셨습니다" if level == 4 else "축하드립니다. 통과하셨습니다"
+
+    issues_text = chr(10).join(f'- {issue}' for issue in issues) if issues else '- 특별한 문제점 없음'
+
+    # 코드 요약 섹션
+    summaries_text = ""
+    if code_summaries:
+        summaries_list = chr(10).join(f'- {s}' for s in code_summaries[:5])
+        summaries_text = f"""
+[AI 코드 분석 요약]
+{summaries_list}
+"""
+
+    # 메트릭 섹션
+    metrics_text = ""
+    if metrics:
+        metrics_text = f"""
+[코드 구조 분석]
+- 총 코드 라인: {metrics.get('total_code_lines', 'N/A')}
+- 총 함수 수: {metrics.get('total_functions', 'N/A')}
+- 총 클래스 수: {metrics.get('total_classes', 'N/A')}
+- 최대 중첩 깊이: {metrics.get('max_nesting_depth', 'N/A')}
+- 에러 핸들러 수: {metrics.get('total_error_handlers', 'N/A')}
+- 주석 비율: {metrics.get('comment_ratio', 0):.1%}
+"""
+
+    return f"""[평가 결과]
+레벨: {level}/5
+종합 점수: {scores['overall']:.1f}/100
+보안: {scores['security']:.1f} | 품질: {scores['quality']:.1f} | 베스트 프랙티스: {scores['best_practices']:.1f}
+복잡도: {scores['complexity']:.1f} | 문서화: {scores['documentation']:.1f}
+{summaries_text}{metrics_text}
+[발견된 문제점]
+{issues_text}
+
+[작성 지시]
+위 평가 결과를 바탕으로 심사평을 작성하세요.
+- {severity}
+- 코드 분석 요약과 구조 분석 결과를 참고하여 구체적인 피드백을 주세요
+- 마지막에 "{verdict}"로 판정을 내리세요
+- 150-250자 내외로 작성하세요
 - 오직 심사평만 작성하고, 다른 내용은 포함하지 마세요
 
 심사평:"""

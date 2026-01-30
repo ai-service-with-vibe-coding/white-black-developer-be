@@ -4,7 +4,7 @@
 """
 from typing import Dict, List, Optional
 from app.ai.huggingface_client import get_hf_client
-from app.ai.prompts.chef_ahn import CHEF_AHN_SYSTEM_PROMPT, build_review_prompt
+from app.ai.prompts.chef_ahn import CHEF_AHN_SYSTEM_PROMPT, build_review_prompt, build_detailed_review_prompt
 from app.ai.processors.analysis_orchestrator import RepositoryAnalysisResult
 from app.services.scoring_service import get_scoring_service, LEVEL_DEFINITIONS
 from app.utils.logger import get_logger
@@ -61,14 +61,23 @@ class PersonaService:
                 analysis_result.suggestions[:1]
             )
 
-            # 프롬프트 생성
-            user_prompt = build_review_prompt(
+            # AI 코드 요약 (최대 5개)
+            code_summaries = getattr(analysis_result, 'code_summaries', [])[:5]
+
+            # 집계된 메트릭
+            aggregated_metrics = getattr(analysis_result, 'aggregated_metrics', {})
+
+            # 상세 프롬프트 생성 (코드 요약과 메트릭 포함)
+            user_prompt = build_detailed_review_prompt(
                 level=analysis_result.level,
                 scores=scores,
                 issues=issues,
+                code_summaries=code_summaries,
+                metrics=aggregated_metrics,
             )
 
             logger.info(f"Generating persona review for level {analysis_result.level}...")
+            logger.debug(f"Code summaries: {len(code_summaries)}, Metrics: {bool(aggregated_metrics)}")
 
             # LLM으로 리뷰 생성
             persona_llm = self.hf_client.get_persona_llm()
@@ -241,6 +250,10 @@ class PersonaService:
                 "total_files": analysis_result.total_files,
                 "total_lines": analysis_result.total_lines,
                 "languages": analysis_result.language_stats,
+            },
+            "code_analysis": {
+                "summaries": getattr(analysis_result, 'code_summaries', []),
+                "metrics": getattr(analysis_result, 'aggregated_metrics', {}),
             },
         }
 
