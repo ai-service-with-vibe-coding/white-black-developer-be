@@ -2,6 +2,7 @@
 코드 분석 서비스 (MVP - 단순화 버전)
 코드 문자열을 받아 직접 분석하고 결과 반환
 """
+import re
 from typing import Optional
 from dataclasses import dataclass
 from app.ai.huggingface_client import get_hf_client
@@ -124,7 +125,9 @@ class CodeAnalysisService:
         vuln_result = vuln_detector.detect(code)
         is_vulnerable = vuln_result.get("vulnerable", False)
         vulnerability_score = vuln_result.get("score", 70.0)
-        security_score = vulnerability_score
+
+        # 보안 점수 추가 휴리스틱
+        security_score = self._adjust_security_score(code, vulnerability_score, is_vulnerable)
 
         # 3. 추가 점수 계산 (휴리스틱)
         best_practices_score = self._calculate_best_practices(code, code_review)
@@ -196,87 +199,344 @@ class CodeAnalysisService:
             line_count=line_count,
         )
 
+    def _adjust_security_score(self, code: str, base_score: float, is_vulnerable: bool) -> float:
+        """보안 점수 조정 (추가 휴리스틱)"""
+        score = base_score
+        code_lower = code.lower()
+
+        # ===== 심각한 보안 이슈 (-30 ~ -50) =====
+        critical_patterns = [
+            ("eval(", -30),
+            ("exec(", -30),
+            ("os.system(", -25),
+            ("subprocess.call(", -20),
+            ("shell=True", -25),
+            ("pickle.loads(", -20),
+            ("yaml.load(", -15),  # yaml.safe_load 대신
+            ("__import__", -20),
+        ]
+        for pattern, penalty in critical_patterns:
+            if pattern in code_lower:
+                score += penalty
+
+        # ===== 하드코딩된 민감 정보 (-20 ~ -40) =====
+        sensitive_patterns = [
+            (r'password\s*=\s*["\'][^"\']+["\']', -40),
+            (r'api_key\s*=\s*["\'][^"\']+["\']', -35),
+            (r'secret\s*=\s*["\'][^"\']+["\']', -35),
+            (r'token\s*=\s*["\'][^"\']+["\']', -30),
+            (r'private_key', -30),
+        ]
+        for pattern, penalty in sensitive_patterns:
+            if re.search(pattern, code_lower):
+                score += penalty
+                break  # 하나만 적용
+
+        # ===== SQL Injection 위험 (-25) =====
+        sql_patterns = [
+            'execute("', "execute('",
+            'format(sql', 'f"SELECT', "f'SELECT",
+            '% query', '%s" % ',
+        ]
+        for pattern in sql_patterns:
+            if pattern in code_lower or pattern in code:
+                score -= 25
+                break
+
+        # ===== XSS 위험 (-20) =====
+        xss_patterns = ['innerhtml', 'document.write', 'v-html']
+        for pattern in xss_patterns:
+            if pattern in code_lower:
+                score -= 20
+                break
+
+        # ===== 좋은 보안 패턴 (+10 ~ +20) =====
+        good_patterns = [
+            ("parameterized", 10),
+            ("prepared_statement", 10),
+            ("escape(", 10),
+            ("sanitize", 10),
+            ("validate", 10),
+            ("bcrypt", 15),
+            ("hashlib", 10),
+            ("secrets.", 15),
+            ("csrf", 10),
+            ("https://", 5),
+        ]
+        for pattern, bonus in good_patterns:
+            if pattern in code_lower:
+                score += bonus
+
+        # 취약점 감지 시 추가 페널티
+        if is_vulnerable:
+            score -= 15
+
+        return max(10, min(95, score))
+
     def _calculate_best_practices(self, code: str, review: str) -> float:
-        """베스트 프랙티스 점수"""
-        score = 70.0
-
-        # 긍정적 패턴
-        if "def " in code or "function " in code:
-            score += 5  # 함수 사용
-        if "class " in code:
-            score += 5  # 클래스 사용
-        if "try:" in code or "try {" in code:
-            score += 3  # 에러 처리
-
-        # 부정적 패턴
-        review_lower = review.lower()
-        if "issue" in review_lower or "problem" in review_lower:
-            score -= 5
-        if "error" in review_lower or "bug" in review_lower:
-            score -= 5
-
-        return max(0, min(100, score))
-
-    def _calculate_complexity(self, code: str, line_count: int) -> float:
-        """복잡도 점수 (낮은 복잡도 = 높은 점수)"""
-        # 라인 수 기반
-        if line_count <= 50:
-            base_score = 90.0
-        elif line_count <= 100:
-            base_score = 80.0
-        elif line_count <= 200:
-            base_score = 70.0
-        elif line_count <= 500:
-            base_score = 60.0
-        else:
-            base_score = 50.0
-
-        # 중첩 깊이 패널티
-        max_indent = 0
-        for line in code.split("\n"):
-            stripped = line.lstrip()
-            if stripped:
-                indent = len(line) - len(stripped)
-                spaces = indent if line[0] == " " else indent * 4
-                max_indent = max(max_indent, spaces // 4)
-
-        if max_indent > 5:
-            base_score -= 10
-        elif max_indent > 3:
-            base_score -= 5
-
-        return max(0, min(100, base_score))
-
-    def _calculate_documentation(self, code: str) -> float:
-        """문서화 점수"""
-        score = 50.0
+        """베스트 프랙티스 점수 (엄격한 기준)"""
+        score = 50.0  # 기본 점수를 낮게 시작
 
         lines = code.split("\n")
-        total_lines = len(lines)
-        comment_lines = 0
+        code_lower = code.lower()
 
-        for line in lines:
-            stripped = line.strip()
-            if stripped.startswith("#") or stripped.startswith("//"):
-                comment_lines += 1
-            elif stripped.startswith("/*") or stripped.startswith("\"\"\"") or stripped.startswith("'''"):
-                comment_lines += 1
+        # ===== 긍정적 패턴 (최대 +50) =====
+        # 함수/메서드 사용 (+10)
+        func_count = code.count("def ") + code.count("function ") + code.count("func ")
+        if func_count >= 3:
+            score += 10
+        elif func_count >= 1:
+            score += 5
 
-        # 주석 비율
-        if total_lines > 0:
-            comment_ratio = comment_lines / total_lines
-            if comment_ratio >= 0.2:
-                score = 90.0
-            elif comment_ratio >= 0.1:
-                score = 75.0
-            elif comment_ratio >= 0.05:
-                score = 60.0
-
-        # docstring 확인
-        if '"""' in code or "'''" in code or "/**" in code:
+        # 클래스 사용 (+10)
+        if "class " in code:
             score += 10
 
-        return min(100, score)
+        # 에러 처리 (+10)
+        error_handling = code.count("try:") + code.count("try {") + code.count("catch") + code.count("except")
+        if error_handling >= 2:
+            score += 10
+        elif error_handling >= 1:
+            score += 5
+
+        # 타입 힌트/어노테이션 (+10)
+        if ": str" in code or ": int" in code or ": List" in code or "-> " in code:
+            score += 10
+        if "interface " in code or "type " in code:
+            score += 10
+
+        # 상수 사용 (+5)
+        if "const " in code or code.count("UPPER_CASE") > 0 or "final " in code:
+            score += 5
+
+        # 모듈 import 정리 (+5)
+        if "from " in code and "import " in code:
+            score += 5
+
+        # ===== 부정적 패턴 (최대 -50) =====
+        # 하드코딩된 값 (-15)
+        hardcoded_patterns = [
+            'password', 'secret', 'api_key', 'apikey',
+            '127.0.0.1', 'localhost:',
+            '"http://', "'http://",
+        ]
+        for pattern in hardcoded_patterns:
+            if pattern in code_lower:
+                score -= 15
+                break
+
+        # 매직 넘버 (-10)
+        import re
+        magic_numbers = re.findall(r'[=<>]\s*\d{2,}[^0-9]', code)
+        if len(magic_numbers) > 3:
+            score -= 10
+        elif len(magic_numbers) > 1:
+            score -= 5
+
+        # print/console.log 디버깅 (-10)
+        debug_count = code.count("print(") + code.count("console.log") + code.count("System.out")
+        if debug_count > 5:
+            score -= 10
+        elif debug_count > 2:
+            score -= 5
+
+        # 전역 변수 사용 (-10)
+        if "global " in code:
+            score -= 10
+
+        # eval/exec 사용 (-15)
+        if "eval(" in code or "exec(" in code:
+            score -= 15
+
+        # TODO/FIXME/HACK 주석 (-5)
+        if "TODO" in code or "FIXME" in code or "HACK" in code:
+            score -= 5
+
+        # 빈 except/catch (-10)
+        if "except:" in code or "except Exception:" in code or "catch {" in code:
+            if "pass" in code or "// " not in code:
+                score -= 10
+
+        # 매우 긴 라인 (-10)
+        long_lines = sum(1 for line in lines if len(line) > 120)
+        if long_lines > 5:
+            score -= 10
+        elif long_lines > 2:
+            score -= 5
+
+        # 리뷰 결과 반영
+        review_lower = review.lower()
+        if "issue" in review_lower or "problem" in review_lower:
+            score -= 10
+        if "error" in review_lower or "bug" in review_lower:
+            score -= 10
+        if "good" in review_lower or "clean" in review_lower:
+            score += 10
+
+        return max(10, min(95, score))
+
+    def _calculate_complexity(self, code: str, line_count: int) -> float:
+        """복잡도 점수 (엄격한 기준: 낮은 복잡도 = 높은 점수)"""
+        score = 70.0
+        lines = code.split("\n")
+
+        # ===== 함수/메서드 크기 분석 =====
+        # 함수 개수
+        func_count = code.count("def ") + code.count("function ") + code.count("func ")
+
+        if func_count > 0:
+            avg_lines_per_func = line_count / func_count
+            if avg_lines_per_func <= 15:
+                score += 15  # 작은 함수들 - 매우 좋음
+            elif avg_lines_per_func <= 30:
+                score += 5   # 적절한 크기
+            elif avg_lines_per_func > 50:
+                score -= 15  # 너무 큰 함수
+            elif avg_lines_per_func > 30:
+                score -= 5   # 다소 큰 함수
+        else:
+            # 함수 없이 스크립트 형태
+            if line_count > 50:
+                score -= 20  # 구조화 안됨
+
+        # ===== 중첩 깊이 분석 (더 엄격) =====
+        max_indent = 0
+        deep_nesting_count = 0
+        for line in lines:
+            stripped = line.lstrip()
+            if stripped and not stripped.startswith("#") and not stripped.startswith("//"):
+                indent = len(line) - len(stripped)
+                indent_level = indent // 4 if "    " in line[:indent] or indent % 4 == 0 else indent // 2
+                max_indent = max(max_indent, indent_level)
+                if indent_level >= 4:
+                    deep_nesting_count += 1
+
+        if max_indent >= 6:
+            score -= 25  # 매우 깊은 중첩
+        elif max_indent >= 5:
+            score -= 15
+        elif max_indent >= 4:
+            score -= 10
+        elif max_indent <= 2:
+            score += 10  # 얕은 중첩 - 좋음
+
+        if deep_nesting_count > 10:
+            score -= 10  # 깊은 중첩이 많음
+
+        # ===== 조건문/반복문 복잡도 =====
+        conditionals = code.count("if ") + code.count("elif ") + code.count("else:") + \
+                       code.count("else {") + code.count("switch") + code.count("case ")
+        loops = code.count("for ") + code.count("while ") + code.count(".forEach") + \
+                code.count(".map(") + code.count(".filter(")
+
+        cyclomatic = conditionals + loops
+        if cyclomatic > 20:
+            score -= 20  # 매우 복잡
+        elif cyclomatic > 10:
+            score -= 10
+        elif cyclomatic <= 5:
+            score += 10  # 단순
+
+        # ===== 라인 길이 =====
+        very_long_lines = sum(1 for line in lines if len(line) > 100)
+        if very_long_lines > 10:
+            score -= 15
+        elif very_long_lines > 5:
+            score -= 5
+
+        # ===== 파일 크기 =====
+        if line_count > 500:
+            score -= 20  # 파일이 너무 큼
+        elif line_count > 300:
+            score -= 10
+        elif line_count <= 100:
+            score += 5  # 적절한 크기
+
+        return max(15, min(95, score))
+
+    def _calculate_documentation(self, code: str) -> float:
+        """문서화 점수 (엄격한 기준)"""
+        score = 30.0  # 문서화 없으면 낮은 점수
+
+        lines = code.split("\n")
+        total_lines = len([l for l in lines if l.strip()])  # 빈 줄 제외
+        comment_lines = 0
+        docstring_count = 0
+        inline_comments = 0
+
+        in_multiline = False
+        for line in lines:
+            stripped = line.strip()
+
+            # 멀티라인 주석/docstring
+            if '"""' in stripped or "'''" in stripped or "/*" in stripped:
+                docstring_count += 1
+                in_multiline = not in_multiline if stripped.count('"""') == 1 or stripped.count("'''") == 1 else False
+                comment_lines += 1
+            elif in_multiline:
+                comment_lines += 1
+            elif stripped.startswith("#") or stripped.startswith("//"):
+                comment_lines += 1
+            # 인라인 주석
+            elif "#" in stripped or "//" in stripped:
+                inline_comments += 1
+
+        # ===== 주석 비율 점수 =====
+        if total_lines > 0:
+            comment_ratio = comment_lines / total_lines
+            if comment_ratio >= 0.25:
+                score += 35  # 매우 잘 문서화됨
+            elif comment_ratio >= 0.15:
+                score += 25
+            elif comment_ratio >= 0.10:
+                score += 15
+            elif comment_ratio >= 0.05:
+                score += 5
+            elif comment_ratio < 0.02:
+                score -= 10  # 거의 주석 없음
+
+        # ===== Docstring 점수 =====
+        func_count = code.count("def ") + code.count("function ") + code.count("func ")
+        class_count = code.count("class ")
+
+        if docstring_count >= func_count + class_count and func_count > 0:
+            score += 20  # 모든 함수/클래스에 docstring
+        elif docstring_count >= (func_count + class_count) / 2:
+            score += 10  # 절반 이상
+        elif docstring_count > 0:
+            score += 5
+        elif func_count > 3:
+            score -= 10  # 함수가 많은데 docstring 없음
+
+        # ===== 좋은 문서화 패턴 =====
+        good_patterns = [
+            "Args:", "Returns:", "Raises:",  # Python docstring
+            "@param", "@return", "@throws",   # JSDoc/JavaDoc
+            "Parameters", "Example:",          # 일반
+        ]
+        for pattern in good_patterns:
+            if pattern in code:
+                score += 5
+                break
+
+        # ===== README나 설명 패턴 =====
+        if "README" in code or "Usage:" in code or "Example:" in code:
+            score += 5
+
+        # ===== 나쁜 패턴 =====
+        # 의미없는 주석
+        meaningless = ["# TODO", "# FIXME", "// TODO", "// FIXME", "# test", "// test"]
+        for pattern in meaningless:
+            if pattern in code:
+                score -= 3
+
+        # 변수명만 있는 주석 (예: # x, # i)
+        import re
+        short_comments = re.findall(r'#\s*[a-z]\s*$', code, re.MULTILINE)
+        if len(short_comments) > 3:
+            score -= 5
+
+        return max(10, min(95, score))
 
     def _extract_issues(self, review: str, is_vulnerable: bool) -> list:
         """이슈 추출"""
