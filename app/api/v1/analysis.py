@@ -124,11 +124,11 @@ async def health_check():
 
 @router.post(
     "/preload",
-    summary="모델 사전 로드",
-    description="모든 AI 모델을 미리 로드합니다. 첫 요청의 지연을 줄입니다.",
+    summary="모델 수동 로드",
+    description="AI 모델을 수동으로 로드합니다. 서버 시작 시 자동 로드되지만, 실패 시 이 API로 재시도할 수 있습니다.",
 )
 async def preload_models():
-    """모델 사전 로드"""
+    """모델 수동 로드 (자동 로드 실패 시 재시도용)"""
     try:
         client = get_hf_client()
         client.preload_all_models()
